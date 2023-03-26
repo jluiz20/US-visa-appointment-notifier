@@ -1,11 +1,10 @@
 const puppeteer = require('puppeteer');
-const {parseISO, compareAsc, isBefore, format} = require('date-fns')
+const { parseISO, compareAsc, isBefore, format } = require('date-fns')
 require('dotenv').config();
 
-const {delay, sendEmail, logStep} = require('./utils');
-const {siteInfo, loginCred, IS_PROD, NEXT_SCHEDULE_POLL, MAX_NUMBER_OF_POLL, NOTIFY_ON_DATE_BEFORE} = require('./config');
+const { delay, sendEmail, logStep } = require('./utils');
+const { siteInfo, loginCred, IS_PROD, NEXT_SCHEDULE_POLL_MIN, MAX_NUMBER_OF_POLL, NOTIFY_ON_DATE_BEFORE, SLEEP_HOUR, WAKEUP_HOUR } = require('./config');
 
-let isLoggedIn = false;
 let maxTries = MAX_NUMBER_OF_POLL
 
 const login = async (page) => {
@@ -47,59 +46,69 @@ const checkForSchedules = async (page) => {
     return document.querySelector('body').innerText
   });
 
-  try{
-    console.log(bodyText);
-    const parsedBody =  JSON.parse(bodyText);
+  try {
+    const parsedBody = JSON.parse(bodyText);
 
-    if(!Array.isArray(parsedBody)) {
+    if (!Array.isArray(parsedBody)) {
       throw "Failed to parse dates, probably because you are not logged in";
     }
 
-    const dates =parsedBody.map(item => parseISO(item.date));
+    const dates = parsedBody.map(item => parseISO(item.date));
     const [earliest] = dates.sort(compareAsc)
 
     return earliest;
-  }catch(err){
+  } catch (err) {
     console.log("Unable to parse page JSON content", originalPageContent);
     console.error(err)
-    isLoggedIn = false;
   }
 }
 
 
-const process = async (browser) => {
+const process = async () => {
+  const browser = await puppeteer.launch(!IS_PROD ? { headless: false } : undefined);
+
   logStep(`starting process with ${maxTries} tries left`);
 
-  if(maxTries-- <= 0){
-    console.log('Reached Max tries')
-    return
+  const currentHour = new Date().getHours()
+
+  if (currentHour > SLEEP_HOUR && currentHour < WAKEUP_HOUR) {
+    logStep("After hours, doing nothing")
+  } else {
+    try {
+      if (maxTries-- <= 0) {
+        console.log('Reached Max tries')
+        return
+      }
+
+      const page = await browser.newPage();
+
+      await login(page);
+
+      const earliestDate = await checkForSchedules(page);
+      logStep(`Earliest date found is ${format(earliestDate, 'dd-MM-yyyy')}`)
+
+      if (earliestDate && isBefore(earliestDate, parseISO(NOTIFY_ON_DATE_BEFORE))) {
+        await notifyMe(earliestDate);
+      }
+
+      await browser.close();
+    } catch (err) {
+      console.error(err);
+    }
   }
 
-  const page = await browser.newPage();
+  logStep(`Sleeping for ${NEXT_SCHEDULE_POLL_MIN} minutes`)
 
-  if(!isLoggedIn) {
-     isLoggedIn = await login(page);
-  }
+  await delay(NEXT_SCHEDULE_POLL_MIN)
 
-  const earliestDate = await checkForSchedules(page);
-  if(earliestDate && isBefore(earliestDate, parseISO(NOTIFY_ON_DATE_BEFORE))){
-    await notifyMe(earliestDate);
-  }
-
-  await delay(NEXT_SCHEDULE_POLL)
-
-  await process(browser)
+  await process()
 }
 
 
 (async () => {
-  const browser = await puppeteer.launch(!IS_PROD ? {headless: false}: undefined);
-
-  try{
-    await process(browser);
-  }catch(err){
+  try {
+    await process();
+  } catch (err) {
     console.error(err);
   }
-
-  await browser.close();
 })();

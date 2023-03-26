@@ -3,11 +3,11 @@ const formData = require('form-data');
 
 const mailgun = new Mailgun(formData);
 const config = require('./config');
-const mg = mailgun.client({username: 'api', key: config.mailgun.API_KEY});
+const mg = mailgun.client({ username: 'api', key: config.mailgun.API_KEY });
 
 const debug = async (page, logName, saveScreenShot) => {
-  if(saveScreenShot){
-    await page.screenshot({path: `${logName}.png`});
+  if (saveScreenShot) {
+    await page.screenshot({ path: `${logName}.png` });
   }
 
   await page.evaluate(() => {
@@ -15,7 +15,10 @@ const debug = async (page, logName, saveScreenShot) => {
   });
 };
 
-const delay = timeout => new Promise(resolve => setTimeout(resolve, timeout));
+const delay = timeout => {
+  const timeoutInMs = timeout * 60 * 1000
+  return new Promise(resolve => setTimeout(resolve, timeoutInMs))
+};
 
 const sendEmail = async (params) => {
   const data = {
@@ -28,7 +31,7 @@ const sendEmail = async (params) => {
 };
 
 const logStep = (stepTitle) => {
-  console.log("=====>>> Step:", stepTitle);
+  console.log(`${new Date().toLocaleString()} ==> Step: ${stepTitle}`);
 }
 
 module.exports = {
