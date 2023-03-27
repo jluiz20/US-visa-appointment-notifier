@@ -71,7 +71,7 @@ const process = async () => {
 
   const currentHour = new Date().getHours()
 
-  if (currentHour > SLEEP_HOUR && currentHour < WAKEUP_HOUR) {
+  if (currentHour >= SLEEP_HOUR && currentHour < WAKEUP_HOUR) {
     logStep("After hours, doing nothing")
   } else {
     try {
@@ -91,10 +91,11 @@ const process = async () => {
         await notifyMe(earliestDate);
       }
 
-      await browser.close();
     } catch (err) {
       console.error(err);
     }
+
+    await browser.close();
   }
 
   logStep(`Sleeping for ${NEXT_SCHEDULE_POLL_MIN} minutes`)
