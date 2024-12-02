@@ -24,9 +24,10 @@
   },
   "homepage": "https://github.com/theoomoregbee/US-visa-appointment-notifier#readme",
   "dependencies": {
-    "date-fns": "^2.29.2",
-    "dotenv": "^16.0.1",
-    "mailgun.js": "^8.0.0",
-    "puppeteer": "^16.2.0"
+    "date-fns": "^4.1.0",
+    "dotenv": "^16.4.5",
+    "mailgun.js": "^10.2.4",
+    "puppeteer": "^23.9.0",
+    "ramda": "^0.30.1"
   }
 }

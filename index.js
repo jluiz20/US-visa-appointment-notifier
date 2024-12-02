@@ -1,59 +1,34 @@
 const puppeteer = require('puppeteer');
-const {parseISO, compareAsc, isBefore, format} = require('date-fns')
+const {format} = require('date-fns')
 require('dotenv').config();
 const fs = require('fs');
+const R = require('ramda')
 
 const {delay, sendEmail, logStep} = require('./utils');
 const {
-    siteInfo,
-    loginCred,
     IS_PROD,
     NEXT_SCHEDULE_POLL_MIN,
     MAX_NUMBER_OF_POLL,
-    NOTIFY_ON_DATE_BEFORE,
+    DATES,
     SLEEP_HOUR,
     WAKEUP_HOUR
 } = require('./config');
 
 let maxTries = MAX_NUMBER_OF_POLL
 
-const login = async (page) => {
-    logStep('logging in');
-    await page.goto(siteInfo.LOGIN_URL);
-
-    const form = await page.$("form#sign_in_form");
-
-    const email = await form.$('input[name="user[email]"]');
-    const password = await form.$('input[name="user[password]"]');
-    const privacyTerms = await form.$('input[name="policy_confirmed"]');
-    const signInButton = await form.$('input[name="commit"]');
-
-    await email.type(loginCred.EMAIL);
-    await password.type(loginCred.PASSWORD);
-    await privacyTerms.click();
-    await signInButton.click();
-
-    await page.waitForNavigation();
-
-    return true;
-}
-
-const notifyMe = async (earliestDate) => {
-    const formattedDate = format(earliestDate, 'dd-MM-yyyy');
-    logStep(`sending an email to schedule for ${formattedDate}`);
+const notifyMe = async (availability) => {
+    const formattedDate = format(R.prop('start_at')(availability), 'dd-MM-yyyy HH:mm');
+    const available = R.prop('approximate_available_capacity')(availability);
+    logStep(`sending an email for availability on ${formattedDate} for ${available} people`);
     await sendEmail({
-        subject: `We found an earlier date ${formattedDate}`,
+        subject: `We found an available time on ${formattedDate} for ${available} people`,
         text: `Hurry and schedule for ${formattedDate} before it is taken.`
     })
 }
 
-const checkForSchedules = async (page) => {
-    logStep('checking for schedules');
-    await page.setExtraHTTPHeaders({
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'X-Requested-With': 'XMLHttpRequest'
-    });
-    await page.goto(siteInfo.APPOINTMENTS_JSON_URL);
+const checkForAvailabilities = async (page, date) => {
+    logStep('checking for availabilities');
+    await page.goto(`https://fareharbor.com/api/v1/companies/leavenworthreindeer/search/availabilities/date/${date}/?allow_grouped=yes&bookable_only=no&flow=17645`);
 
     const originalPageContent = await page.content();
     const bodyText = await page.evaluate(() => {
@@ -62,21 +37,18 @@ const checkForSchedules = async (page) => {
 
     try {
         const parsedBody = JSON.parse(bodyText);
-
-        if (!Array.isArray(parsedBody)) {
+        if (!Array.isArray(parsedBody.availabilities)) {
             throw "Failed to parse dates, probably because you are not logged in";
         }
-
-        const dates = parsedBody.map(item => parseISO(item.date));
-        const [earliest] = dates.sort(compareAsc)
-
-        return earliest;
+        return R.pipe(
+            R.filter(R.propSatisfies(capacity => capacity >= 2, 'approximate_available_capacity')),
+            R.map(R.pick(['approximate_available_capacity', 'start_at']))
+        )(parsedBody.availabilities);
     } catch (err) {
         console.log("Unable to parse page JSON content", originalPageContent);
         console.error(err)
     }
 }
-
 
 const process = async () => {
     const browser = await puppeteer.launch(!IS_PROD ? {headless: false} : undefined);
@@ -89,35 +61,30 @@ const process = async () => {
     if (currentHour >= SLEEP_HOUR || currentHour < WAKEUP_HOUR) {
         logStep("After hours, doing nothing")
     } else {
-        try {
-            if (maxTries-- <= 0) {
-                console.log('Reached Max tries')
-                return
-            }
-            const page = await browser.newPage();
+        for (const date of JSON.parse(DATES)) {
+            try {
+                const page = await browser.newPage();
 
-            await login(page);
+                const availableTimes = await checkForAvailabilities(page, date);
+                logStep(`availableTimes result is ${availableTimes}`)
 
-            const earliestDate = await checkForSchedules(page);
-            let earliestDateStr = format(earliestDate, 'yyyy-MM-dd');
-            logStep(`Earliest date found is ${earliestDateStr}`)
+                const row = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString() + "," + availableTimes + "\n"
 
-            let diff = Math.round((earliestDate - now) / (1000 * 60 * 60 * 24))
+                fs.appendFile('./dates.csv', row, err => {
+                    if (err) {
+                        console.error(err);
+                    }
+                });
 
-            const row = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString() + "," + earliestDateStr + "," + diff + "\n"
-
-            fs.appendFile('./dates.csv', row, err => {
-                if (err) {
-                    console.error(err);
+                if (R.not(R.isEmpty(availableTimes))) {
+                    R.forEach(await notifyMe)(availableTimes)
                 }
-            });
 
-            if (earliestDate && isBefore(earliestDate, parseISO(NOTIFY_ON_DATE_BEFORE))) {
-                await notifyMe(earliestDate);
+            } catch (err) {
+                console.error(err);
             }
 
-        } catch (err) {
-            console.error(err);
+            await new Promise(r => setTimeout(r, 2000));
         }
 
         await browser.close();
@@ -129,7 +96,6 @@ const process = async () => {
 
     await process()
 }
-
 
 (async () => {
     try {
